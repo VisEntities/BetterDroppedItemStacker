@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.0.0")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.0.1")]
     [Description("Reduces the number of individual dropped items by grouping them into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -134,7 +134,7 @@ namespace Oxide.Plugins
                                 {
                                     if (!nearbyItem.item.MoveToContainer(droppedItemContainer.inventory))
                                     {
-                                        nearbyItem.item.Remove();
+                                        // nearbyItem.item.Remove();
                                     }
                                 }
                             }
