@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.0.1")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.1.0")]
     [Description("Reduces the number of individual dropped items by grouping them into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -41,6 +41,9 @@ namespace Oxide.Plugins
 
             [JsonProperty("Detection Radius For Nearby Dropped Items")]
             public float DetectionRadiusForNearbyDroppedItems { get; set; }
+
+            [JsonProperty("Dropped Item Container Despawn Time Seconds")]
+            public float DroppedItemContainerDespawnTimeSeconds { get; set; }
         }
 
         protected override void LoadConfig()
@@ -73,6 +76,11 @@ namespace Oxide.Plugins
             if (string.Compare(_config.Version, "1.0.0") < 0)
                 _config = defaultConfig;
 
+            if (string.Compare(_config.Version, "1.1.0") < 0)
+            {
+                _config.DroppedItemContainerDespawnTimeSeconds = defaultConfig.DroppedItemContainerDespawnTimeSeconds;
+            }
+
             PrintWarning("Config update complete! Updated from version " + _config.Version + " to " + Version.ToString());
             _config.Version = Version.ToString();
         }
@@ -84,7 +92,8 @@ namespace Oxide.Plugins
                 Version = Version.ToString(),
                 NumberOfNearbyItemsNeededForGrouping = 6,
                 DurationBeforeGroupingItemsSeconds = 5,
-                DetectionRadiusForNearbyDroppedItems = 4f
+                DetectionRadiusForNearbyDroppedItems = 4f,
+                DroppedItemContainerDespawnTimeSeconds = 300f
             };
         }
 
@@ -164,6 +173,8 @@ namespace Oxide.Plugins
             droppedItemContainer.inventory.entityOwner = droppedItemContainer;
 
             droppedItemContainer.Spawn();
+            droppedItemContainer.ResetRemovalTime(_config.DroppedItemContainerDespawnTimeSeconds);
+
             return droppedItemContainer;
         }
 
