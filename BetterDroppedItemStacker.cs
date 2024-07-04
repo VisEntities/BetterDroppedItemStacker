@@ -1,12 +1,13 @@
 ﻿using Facepunch;
 using Newtonsoft.Json;
 using Rust;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.1.0")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.2.0")]
     [Description("Reduces the number of individual dropped items by grouping them into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -42,8 +43,11 @@ namespace Oxide.Plugins
             [JsonProperty("Detection Radius For Nearby Dropped Items")]
             public float DetectionRadiusForNearbyDroppedItems { get; set; }
 
-            [JsonProperty("Dropped Item Container Despawn Time Seconds")]
-            public float DroppedItemContainerDespawnTimeSeconds { get; set; }
+            [JsonProperty("Dropped Item Container Fallback Despawn Time Seconds")]
+            public float DroppedItemContainerFallbackDespawnTimeSeconds { get; set; }
+
+            [JsonProperty("Item Categories To Exclude From Grouping ")]
+            public List<string> ItemCategoriesToExcludeFromGrouping { get; set; }
         }
 
         protected override void LoadConfig()
@@ -78,7 +82,13 @@ namespace Oxide.Plugins
 
             if (string.Compare(_config.Version, "1.1.0") < 0)
             {
-                _config.DroppedItemContainerDespawnTimeSeconds = defaultConfig.DroppedItemContainerDespawnTimeSeconds;
+                _config.DroppedItemContainerFallbackDespawnTimeSeconds = defaultConfig.DroppedItemContainerFallbackDespawnTimeSeconds;
+            }
+
+            if (string.Compare(_config.Version, "1.2.0") < 0)
+            {
+                _config.DroppedItemContainerFallbackDespawnTimeSeconds = defaultConfig.DroppedItemContainerFallbackDespawnTimeSeconds;
+                _config.ItemCategoriesToExcludeFromGrouping = defaultConfig.ItemCategoriesToExcludeFromGrouping;
             }
 
             PrintWarning("Config update complete! Updated from version " + _config.Version + " to " + Version.ToString());
@@ -93,7 +103,12 @@ namespace Oxide.Plugins
                 NumberOfNearbyItemsNeededForGrouping = 6,
                 DurationBeforeGroupingItemsSeconds = 5,
                 DetectionRadiusForNearbyDroppedItems = 4f,
-                DroppedItemContainerDespawnTimeSeconds = 300f
+                DroppedItemContainerFallbackDespawnTimeSeconds = 300f,
+                ItemCategoriesToExcludeFromGrouping = new List<string>
+                {
+                    "Weapon",
+                    "Ammunition"
+                }
             };
         }
 
@@ -129,25 +144,11 @@ namespace Oxide.Plugins
                     return;
 
                 List<DroppedItem> nearbyDroppedItems = GetNearbyDroppedItems(worldEntity.transform.position, _config.DetectionRadiusForNearbyDroppedItems);
-
                 if (nearbyDroppedItems.Count >= _config.NumberOfNearbyItemsNeededForGrouping)
                 {
                     if (TerrainUtil.GetGroundInfo(worldEntity.transform.position, out RaycastHit raycastHit, 5f, LAYER_TERRAIN | LAYER_WORLD | LAYER_CONSTRUCTION))
                     {
-                        DroppedItemContainer droppedItemContainer = SpawnDroppedItemContainer(raycastHit.point, Quaternion.FromToRotation(Vector3.up, raycastHit.normal), nearbyDroppedItems.Count);
-                        if (droppedItemContainer != null)
-                        {
-                            foreach (DroppedItem nearbyItem in nearbyDroppedItems)
-                            {
-                                if (nearbyItem != null && nearbyItem.ShortPrefabName == "generic_world")
-                                {
-                                    if (!nearbyItem.item.MoveToContainer(droppedItemContainer.inventory))
-                                    {
-                                        // nearbyItem.item.Remove();
-                                    }
-                                }
-                            }
-                        }
+                        DroppedItemContainer droppedItemContainer = SpawnDroppedItemContainer(raycastHit.point, Quaternion.FromToRotation(Vector3.up, raycastHit.normal), nearbyDroppedItems.Count, nearbyDroppedItems);
                     }
                 }
 
@@ -161,7 +162,7 @@ namespace Oxide.Plugins
 
         #region Item Container Spawning and Setup
 
-        private DroppedItemContainer SpawnDroppedItemContainer(Vector3 position, Quaternion rotation, int capacity)
+        private DroppedItemContainer SpawnDroppedItemContainer(Vector3 position, Quaternion rotation, int capacity, List<DroppedItem> droppedItems)
         {
             DroppedItemContainer droppedItemContainer = GameManager.server.CreateEntity(PREFAB_ITEM_DROP, position, rotation) as DroppedItemContainer;
             if (droppedItemContainer == null)
@@ -172,9 +173,15 @@ namespace Oxide.Plugins
             droppedItemContainer.inventory.GiveUID();
             droppedItemContainer.inventory.entityOwner = droppedItemContainer;
 
-            droppedItemContainer.Spawn();
-            droppedItemContainer.ResetRemovalTime(_config.DroppedItemContainerDespawnTimeSeconds);
+            foreach (DroppedItem droppedItem in droppedItems)
+            {
+                droppedItem.item.MoveToContainer(droppedItemContainer.inventory);
+            }
 
+            droppedItemContainer.Spawn();
+            // Calculate the removal time based on contents of the container and ensure it's no less than the configured minimum.
+            droppedItemContainer.ResetRemovalTime(Math.Max(_config.DroppedItemContainerFallbackDespawnTimeSeconds, droppedItemContainer.CalculateRemovalTime()));
+        
             return droppedItemContainer;
         }
 
@@ -186,6 +193,17 @@ namespace Oxide.Plugins
         {
             List<DroppedItem> droppedItems = Pool.GetList<DroppedItem>();
             Vis.Entities(position, radius, droppedItems, LAYER_PHYSICS_DEBRIS, QueryTriggerInteraction.Ignore);
+
+            for (int i = droppedItems.Count - 1; i >= 0; i--)
+            {
+                DroppedItem droppedItem = droppedItems[i];
+                if (droppedItem == null || droppedItem.ShortPrefabName != "generic_world"
+                    || _config.ItemCategoriesToExcludeFromGrouping.Contains(droppedItem.item.info.category.ToString()))
+                {
+                    droppedItems.RemoveAt(i);
+                }
+            }
+
             return droppedItems;
         }
 
