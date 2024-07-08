@@ -1,4 +1,10 @@
-﻿using Facepunch;
+﻿/*
+ * Copyright (C) 2024 Game4Freak.io
+ * Your use of this mod indicates acceptance of the Game4Freak EULA.
+ * Full legal terms can be found at https://game4freak.io/eula/
+ */
+
+using Facepunch;
 using Newtonsoft.Json;
 using Rust;
 using System;
