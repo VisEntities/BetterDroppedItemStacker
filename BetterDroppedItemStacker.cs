@@ -13,7 +13,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.2.0")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.3.0")]
     [Description("Reduces the number of individual dropped items by grouping them into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -24,10 +24,8 @@ namespace Oxide.Plugins
 
         private List<Timer> _activeTimers = new List<Timer>();
 
-        private const int LAYER_WORLD = Layers.Mask.World;
-        private const int LAYER_TERRAIN = Layers.Mask.Terrain;
-        private const int LAYER_CONSTRUCTION = Layers.Mask.Construction;
-        private const int LAYER_PHYSICS_DEBRIS = Layers.Mask.Physics_Debris;
+        private const int LAYER_PHYSICS_DEBRIS = Layers.Mask.Physics_Debris;        
+        private const int LAYER_OBSTACLES = Layers.Mask.World | Layers.Mask.Terrain | Layers.Mask.Construction;
 
         private const string PREFAB_ITEM_DROP = "assets/prefabs/misc/item drop/item_drop.prefab";
 
@@ -152,7 +150,7 @@ namespace Oxide.Plugins
                 List<DroppedItem> nearbyDroppedItems = GetNearbyDroppedItems(worldEntity.transform.position, _config.DetectionRadiusForNearbyDroppedItems);
                 if (nearbyDroppedItems.Count >= _config.NumberOfNearbyItemsNeededForGrouping)
                 {
-                    if (TerrainUtil.GetGroundInfo(worldEntity.transform.position, out RaycastHit raycastHit, 5f, LAYER_TERRAIN | LAYER_WORLD | LAYER_CONSTRUCTION))
+                    if (TerrainUtil.GetGroundInfo(worldEntity.transform.position, out RaycastHit raycastHit, 1f, LAYER_OBSTACLES))
                     {
                         DroppedItemContainer droppedItemContainer = SpawnDroppedItemContainer(raycastHit.point, Quaternion.FromToRotation(Vector3.up, raycastHit.normal), nearbyDroppedItems.Count, nearbyDroppedItems);
                     }
@@ -204,7 +202,8 @@ namespace Oxide.Plugins
             {
                 DroppedItem droppedItem = droppedItems[i];
                 if (droppedItem == null || droppedItem.ShortPrefabName != "generic_world"
-                    || _config.ItemCategoriesToExcludeFromGrouping.Contains(droppedItem.item.info.category.ToString()))
+                    || _config.ItemCategoriesToExcludeFromGrouping.Contains(droppedItem.item.info.category.ToString())
+                    || !GamePhysics.LineOfSight(position, droppedItem.transform.position, LAYER_OBSTACLES))
                 {
                     droppedItems.RemoveAt(i);
                 }
