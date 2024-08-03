@@ -13,7 +13,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.3.0")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.4.0")]
     [Description("Reduces the number of individual dropped items by grouping them into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -140,6 +140,13 @@ namespace Oxide.Plugins
         private void OnItemDropped(Item item, BaseEntity worldEntity)
         {
             if (item == null || worldEntity == null)
+                return;
+
+            BasePlayer ownerPlayer = item.GetOwnerPlayer();
+            if (ownerPlayer == null)
+                return;
+
+            if (ownerPlayer.InSafeZone())
                 return;
 
             var itemGroupingTimer = timer.Once(_config.DurationBeforeGroupingItemsSeconds, () =>
