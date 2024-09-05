@@ -13,7 +13,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.4.0")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.4.1")]
     [Description("Reduces the number of individual dropped items by grouping them into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -163,7 +163,7 @@ namespace Oxide.Plugins
                     }
                 }
 
-                Pool.FreeList(ref nearbyDroppedItems);
+                Pool.FreeUnmanaged(ref nearbyDroppedItems);
             });
 
             _activeTimers.Add(itemGroupingTimer);
@@ -202,7 +202,7 @@ namespace Oxide.Plugins
 
         private List<DroppedItem> GetNearbyDroppedItems(Vector3 position, float radius)
         {
-            List<DroppedItem> droppedItems = Pool.GetList<DroppedItem>();
+            List<DroppedItem> droppedItems = Pool.Get<List<DroppedItem>>();
             Vis.Entities(position, radius, droppedItems, LAYER_PHYSICS_DEBRIS, QueryTriggerInteraction.Ignore);
 
             for (int i = droppedItems.Count - 1; i >= 0; i--)
