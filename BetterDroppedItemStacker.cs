@@ -6,6 +6,7 @@
 
 using Facepunch;
 using Newtonsoft.Json;
+using Oxide.Core;
 using Rust;
 using System;
 using System.Collections.Generic;
@@ -13,7 +14,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.4.1")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.5.0")]
     [Description("Reduces the number of individual dropped items by grouping them into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -192,7 +193,8 @@ namespace Oxide.Plugins
             droppedItemContainer.Spawn();
             // Calculate the removal time based on contents of the container and ensure it's no less than the configured minimum.
             droppedItemContainer.ResetRemovalTime(Math.Max(_config.DroppedItemContainerFallbackDespawnTimeSeconds, droppedItemContainer.CalculateRemovalTime()));
-        
+
+            ExposedHook.OnDroppedItemContainerSpawned(droppedItemContainer, droppedItems);
             return droppedItemContainer;
         }
 
@@ -220,6 +222,18 @@ namespace Oxide.Plugins
         }
 
         #endregion Nearby Items Retrieval
+
+        #region Exposed Hooks
+
+        private static class ExposedHook
+        {
+            public static void OnDroppedItemContainerSpawned(DroppedItemContainer droppedItemContainer, List<DroppedItem> groupedItems)
+            {
+                Interface.CallHook("OnDroppedItemContainerSpawned", droppedItemContainer, groupedItems);
+            }
+        }
+
+        #endregion Exposed Hooks
 
         #region Helper Classes
 
