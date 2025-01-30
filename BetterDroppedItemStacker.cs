@@ -8,13 +8,12 @@ using Facepunch;
 using Newtonsoft.Json;
 using Oxide.Core;
 using Rust;
-using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.5.0")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.6.0")]
     [Description("Reduces the number of individual dropped items by grouping them into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -23,12 +22,12 @@ namespace Oxide.Plugins
         private static BetterDroppedItemStacker _plugin;
         private static Configuration _config;
 
-        private List<Timer> _activeTimers = new List<Timer>();
+        private List<Timer> _pendingGroupTimers = new List<Timer>();
 
-        private const int LAYER_PHYSICS_DEBRIS = Layers.Mask.Physics_Debris;        
+        private const int LAYER_DROPPED_ITEM = Layers.Mask.Physics_Debris;        
         private const int LAYER_OBSTACLES = Layers.Mask.World | Layers.Mask.Terrain | Layers.Mask.Construction;
-
-        private const string PREFAB_ITEM_DROP = "assets/prefabs/misc/item drop/item_drop.prefab";
+        
+        private const string PREFAB_DROPPED_ITEM_CONTAINER = "assets/prefabs/misc/item drop/item_drop.prefab";
 
         #endregion Fields
 
@@ -39,20 +38,20 @@ namespace Oxide.Plugins
             [JsonProperty("Version")]
             public string Version { get; set; }
 
-            [JsonProperty("Duration Before Grouping Items Seconds")]
-            public float DurationBeforeGroupingItemsSeconds { get; set; }
+            [JsonProperty("Time Delay Before Grouping Items Seconds")]
+            public float TimeDelayBeforeGroupingItemsSeconds { get; set; }
+            
+            [JsonProperty("Minimum Nearby Items Required To Group")]
+            public int MinimumNearbyItemsRequiredToGroup { get; set; }
 
-            [JsonProperty("Number Of Nearby Items Needed For Grouping")]
-            public int NumberOfNearbyItemsNeededForGrouping { get; set; }
+            [JsonProperty("Item Detection Radius")]
+            public float ItemDetectionRadius { get; set; }
 
-            [JsonProperty("Detection Radius For Nearby Dropped Items")]
-            public float DetectionRadiusForNearbyDroppedItems { get; set; }
+            [JsonProperty("Container Lifetime Seconds (0=auto-calculate)")]
+            public float ContainerLifetimeSeconds { get; set; }
 
-            [JsonProperty("Dropped Item Container Fallback Despawn Time Seconds")]
-            public float DroppedItemContainerFallbackDespawnTimeSeconds { get; set; }
-
-            [JsonProperty("Item Categories To Exclude From Grouping ")]
-            public List<string> ItemCategoriesToExcludeFromGrouping { get; set; }
+            [JsonProperty("Item Categories To Ignore During Grouping")]
+            public List<string> ItemCategoriesToIgnoreDuringGrouping { get; set; }
         }
 
         protected override void LoadConfig()
@@ -85,16 +84,8 @@ namespace Oxide.Plugins
             if (string.Compare(_config.Version, "1.0.0") < 0)
                 _config = defaultConfig;
 
-            if (string.Compare(_config.Version, "1.1.0") < 0)
-            {
-                _config.DroppedItemContainerFallbackDespawnTimeSeconds = defaultConfig.DroppedItemContainerFallbackDespawnTimeSeconds;
-            }
-
-            if (string.Compare(_config.Version, "1.2.0") < 0)
-            {
-                _config.DroppedItemContainerFallbackDespawnTimeSeconds = defaultConfig.DroppedItemContainerFallbackDespawnTimeSeconds;
-                _config.ItemCategoriesToExcludeFromGrouping = defaultConfig.ItemCategoriesToExcludeFromGrouping;
-            }
+            if (string.Compare(_config.Version, "1.6.0") < 0)
+                _config = defaultConfig;
 
             PrintWarning("Config update complete! Updated from version " + _config.Version + " to " + Version.ToString());
             _config.Version = Version.ToString();
@@ -105,11 +96,11 @@ namespace Oxide.Plugins
             return new Configuration
             {
                 Version = Version.ToString(),
-                NumberOfNearbyItemsNeededForGrouping = 6,
-                DurationBeforeGroupingItemsSeconds = 5,
-                DetectionRadiusForNearbyDroppedItems = 4f,
-                DroppedItemContainerFallbackDespawnTimeSeconds = 300f,
-                ItemCategoriesToExcludeFromGrouping = new List<string>
+                MinimumNearbyItemsRequiredToGroup = 5,
+                TimeDelayBeforeGroupingItemsSeconds = 5,
+                ItemDetectionRadius = 4f,
+                ContainerLifetimeSeconds = 600f,
+                ItemCategoriesToIgnoreDuringGrouping = new List<string>
                 {
                     "Weapon",
                     "Ammunition"
@@ -128,7 +119,7 @@ namespace Oxide.Plugins
 
         private void Unload()
         {
-            foreach (Timer timer in _activeTimers)
+            foreach (Timer timer in _pendingGroupTimers)
             {
                 if (timer != null)
                     timer.Destroy();
@@ -150,13 +141,13 @@ namespace Oxide.Plugins
             if (ownerPlayer.InSafeZone())
                 return;
 
-            var itemGroupingTimer = timer.Once(_config.DurationBeforeGroupingItemsSeconds, () =>
+            Timer itemGroupingTimer = timer.Once(_config.TimeDelayBeforeGroupingItemsSeconds, () =>
             {
                 if (worldEntity == null)
                     return;
 
-                List<DroppedItem> nearbyDroppedItems = GetNearbyDroppedItems(worldEntity.transform.position, _config.DetectionRadiusForNearbyDroppedItems);
-                if (nearbyDroppedItems.Count >= _config.NumberOfNearbyItemsNeededForGrouping)
+                List<DroppedItem> nearbyDroppedItems = GetNearbyDroppedItems(worldEntity.transform.position, _config.ItemDetectionRadius);
+                if (nearbyDroppedItems.Count >= _config.MinimumNearbyItemsRequiredToGroup)
                 {
                     if (TerrainUtil.GetGroundInfo(worldEntity.transform.position, out RaycastHit raycastHit, 1f, LAYER_OBSTACLES))
                     {
@@ -167,16 +158,16 @@ namespace Oxide.Plugins
                 Pool.FreeUnmanaged(ref nearbyDroppedItems);
             });
 
-            _activeTimers.Add(itemGroupingTimer);
+            _pendingGroupTimers.Add(itemGroupingTimer);
         }
 
         #endregion Oxide Hooks
 
-        #region Item Container Spawning and Setup
+        #region Container Spawning and Setup
 
         private DroppedItemContainer SpawnDroppedItemContainer(Vector3 position, Quaternion rotation, int capacity, List<DroppedItem> droppedItems)
         {
-            DroppedItemContainer droppedItemContainer = GameManager.server.CreateEntity(PREFAB_ITEM_DROP, position, rotation) as DroppedItemContainer;
+            DroppedItemContainer droppedItemContainer = GameManager.server.CreateEntity(PREFAB_DROPPED_ITEM_CONTAINER, position, rotation) as DroppedItemContainer;
             if (droppedItemContainer == null)
                 return null;
 
@@ -191,28 +182,32 @@ namespace Oxide.Plugins
             }
 
             droppedItemContainer.Spawn();
-            // Calculate the removal time based on contents of the container and ensure it's no less than the configured minimum.
-            droppedItemContainer.ResetRemovalTime(Math.Max(_config.DroppedItemContainerFallbackDespawnTimeSeconds, droppedItemContainer.CalculateRemovalTime()));
 
-            ExposedHook.OnDroppedItemContainerSpawned(droppedItemContainer, droppedItems);
+            float despawnTime = droppedItemContainer.CalculateRemovalTime();
+            if (_config.ContainerLifetimeSeconds > 0)
+                despawnTime = _config.ContainerLifetimeSeconds;
+
+            droppedItemContainer.ResetRemovalTime(despawnTime);
+
+            ExposedHooks.OnDroppedItemStackerSpawned(droppedItemContainer, droppedItems);
             return droppedItemContainer;
         }
 
-        #endregion Item Container Spawning and Setup
+        #endregion Container Spawning and Setup
 
         #region Nearby Items Retrieval
 
         private List<DroppedItem> GetNearbyDroppedItems(Vector3 position, float radius)
         {
             List<DroppedItem> droppedItems = Pool.Get<List<DroppedItem>>();
-            Vis.Entities(position, radius, droppedItems, LAYER_PHYSICS_DEBRIS, QueryTriggerInteraction.Ignore);
+            Vis.Entities(position, radius, droppedItems, LAYER_DROPPED_ITEM, QueryTriggerInteraction.Ignore);
 
             for (int i = droppedItems.Count - 1; i >= 0; i--)
             {
                 DroppedItem droppedItem = droppedItems[i];
                 if (droppedItem == null || droppedItem.ShortPrefabName != "generic_world"
-                    || _config.ItemCategoriesToExcludeFromGrouping.Contains(droppedItem.item.info.category.ToString())
-                    || !GamePhysics.LineOfSight(position, droppedItem.transform.position, LAYER_OBSTACLES))
+                    || _config.ItemCategoriesToIgnoreDuringGrouping.Contains(droppedItem.item.info.category.ToString())
+                    || !TerrainUtil.HasLineOfSight(position, droppedItem.transform.position, LAYER_OBSTACLES))
                 {
                     droppedItems.RemoveAt(i);
                 }
@@ -225,11 +220,11 @@ namespace Oxide.Plugins
 
         #region Exposed Hooks
 
-        private static class ExposedHook
+        private static class ExposedHooks
         {
-            public static void OnDroppedItemContainerSpawned(DroppedItemContainer droppedItemContainer, List<DroppedItem> groupedItems)
+            public static void OnDroppedItemStackerSpawned(DroppedItemContainer droppedItemContainer, List<DroppedItem> groupedItems)
             {
-                Interface.CallHook("OnDroppedItemContainerSpawned", droppedItemContainer, groupedItems);
+                Interface.CallHook("OnDroppedItemStackerSpawned", droppedItemContainer, groupedItems);
             }
         }
 
@@ -239,6 +234,11 @@ namespace Oxide.Plugins
 
         public static class TerrainUtil
         {
+            public static bool HasLineOfSight(Vector3 startPosition, Vector3 endPosition, LayerMask mask)
+            {
+                return GamePhysics.LineOfSight(startPosition, endPosition, mask);
+            }
+
             public static bool GetGroundInfo(Vector3 startPosition, out RaycastHit raycastHit, float range, LayerMask mask)
             {
                 return Physics.Linecast(startPosition + new Vector3(0.0f, range, 0.0f), startPosition - new Vector3(0.0f, range, 0.0f), out raycastHit, mask);
