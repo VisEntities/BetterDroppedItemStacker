@@ -14,7 +14,7 @@ using UnityEngine;
 namespace Oxide.Plugins
 {
     [Info("Better Dropped Item Stacker", "VisEntities", "1.6.0")]
-    [Description("Reduces the number of individual dropped items by grouping them into one container.")]
+    [Description("Combines scattered dropped items into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
         #region Fields
