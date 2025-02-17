@@ -13,7 +13,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Better Dropped Item Stacker", "VisEntities", "1.6.0")]
+    [Info("Better Dropped Item Stacker", "VisEntities", "1.7.0")]
     [Description("Combines scattered dropped items into one container.")]
     public class BetterDroppedItemStacker : RustPlugin
     {
@@ -24,10 +24,11 @@ namespace Oxide.Plugins
 
         private List<Timer> _pendingGroupTimers = new List<Timer>();
 
+        private const int LAYER_ITEM_DROP = Layers.Mask.Ragdoll;
         private const int LAYER_DROPPED_ITEM = Layers.Mask.Physics_Debris;        
-        private const int LAYER_OBSTACLES = Layers.Mask.World | Layers.Mask.Terrain | Layers.Mask.Construction;
+        private const int LAYER_OBSTACLES = Layers.Mask.Construction | Layers.Mask.Terrain | Layers.Mask.World;
         
-        private const string PREFAB_DROPPED_ITEM_CONTAINER = "assets/prefabs/misc/item drop/item_drop.prefab";
+        private const string PREFAB_ITEM_DROP = "assets/prefabs/misc/item drop/item_drop.prefab";
 
         #endregion Fields
 
@@ -49,6 +50,9 @@ namespace Oxide.Plugins
 
             [JsonProperty("Container Lifetime Seconds (0=auto-calculate)")]
             public float ContainerLifetimeSeconds { get; set; }
+
+            [JsonProperty("Group Into Existing Containers")]
+            public bool GroupIntoExistingContainers { get; set; }
 
             [JsonProperty("Item Categories To Ignore During Grouping")]
             public List<string> ItemCategoriesToIgnoreDuringGrouping { get; set; }
@@ -87,6 +91,11 @@ namespace Oxide.Plugins
             if (string.Compare(_config.Version, "1.6.0") < 0)
                 _config = defaultConfig;
 
+            if (string.Compare(_config.Version, "1.7.0") < 0)
+            {
+                _config.GroupIntoExistingContainers = defaultConfig.GroupIntoExistingContainers;
+            }
+
             PrintWarning("Config update complete! Updated from version " + _config.Version + " to " + Version.ToString());
             _config.Version = Version.ToString();
         }
@@ -100,6 +109,7 @@ namespace Oxide.Plugins
                 TimeDelayBeforeGroupingItemsSeconds = 5,
                 ItemDetectionRadius = 4f,
                 ContainerLifetimeSeconds = 600f,
+                GroupIntoExistingContainers = true,
                 ItemCategoriesToIgnoreDuringGrouping = new List<string>
                 {
                     "Weapon",
@@ -149,9 +159,18 @@ namespace Oxide.Plugins
                 List<DroppedItem> nearbyDroppedItems = GetNearbyDroppedItems(worldEntity.transform.position, _config.ItemDetectionRadius);
                 if (nearbyDroppedItems.Count >= _config.MinimumNearbyItemsRequiredToGroup)
                 {
-                    if (TerrainUtil.GetGroundInfo(worldEntity.transform.position, out RaycastHit raycastHit, 1f, LAYER_OBSTACLES))
+                    DroppedItemContainer container = null;
+                    if (_config.GroupIntoExistingContainers)
                     {
-                        DroppedItemContainer droppedItemContainer = SpawnDroppedItemContainer(raycastHit.point, Quaternion.FromToRotation(Vector3.up, raycastHit.normal), nearbyDroppedItems.Count, nearbyDroppedItems);
+                        container = FindExistingDroppedItemContainer(worldEntity.transform.position, 2f);
+                    }
+                    if (container == null && TerrainUtil.GetGroundInfo(worldEntity.transform.position, out RaycastHit raycastHit, 1f, LAYER_OBSTACLES))
+                    {
+                        container = SpawnDroppedItemContainer(raycastHit.point, Quaternion.FromToRotation(Vector3.up, raycastHit.normal), nearbyDroppedItems.Count);
+                    }
+                    if (container != null)
+                    {
+                        GroupItemsIntoContainer(container, nearbyDroppedItems);
                     }
                 }
 
@@ -165,35 +184,76 @@ namespace Oxide.Plugins
 
         #region Container Spawning and Setup
 
-        private DroppedItemContainer SpawnDroppedItemContainer(Vector3 position, Quaternion rotation, int capacity, List<DroppedItem> droppedItems)
+        private DroppedItemContainer SpawnDroppedItemContainer(Vector3 position, Quaternion rotation, int capacity)
         {
-            DroppedItemContainer droppedItemContainer = GameManager.server.CreateEntity(PREFAB_DROPPED_ITEM_CONTAINER, position, rotation) as DroppedItemContainer;
-            if (droppedItemContainer == null)
+            DroppedItemContainer container = GameManager.server.CreateEntity(PREFAB_ITEM_DROP, position, rotation) as DroppedItemContainer;
+            if (container == null)
                 return null;
 
-            droppedItemContainer.inventory = new ItemContainer();
-            droppedItemContainer.inventory.ServerInitialize(null, capacity);
-            droppedItemContainer.inventory.GiveUID();
-            droppedItemContainer.inventory.entityOwner = droppedItemContainer;
+            container.inventory = new ItemContainer();
+            container.inventory.ServerInitialize(null, capacity);
+            container.inventory.GiveUID();
+            container.inventory.entityOwner = container;
 
-            foreach (DroppedItem droppedItem in droppedItems)
-            {
-                droppedItem.item.MoveToContainer(droppedItemContainer.inventory);
-            }
+            container.Spawn();
 
-            droppedItemContainer.Spawn();
-
-            float despawnTime = droppedItemContainer.CalculateRemovalTime();
+            float despawnTime = container.CalculateRemovalTime();
             if (_config.ContainerLifetimeSeconds > 0)
+            {
                 despawnTime = _config.ContainerLifetimeSeconds;
+            }
+            container.ResetRemovalTime(despawnTime);
 
-            droppedItemContainer.ResetRemovalTime(despawnTime);
+            return container;
+        }
 
-            ExposedHooks.OnDroppedItemStackerSpawned(droppedItemContainer, droppedItems);
-            return droppedItemContainer;
+        private DroppedItemContainer FindExistingDroppedItemContainer(Vector3 position, float searchRadius)
+        {
+            List<DroppedItemContainer> nearbyContainers = Pool.Get<List<DroppedItemContainer>>();
+            Vis.Entities(position, searchRadius, nearbyContainers, LAYER_ITEM_DROP, QueryTriggerInteraction.Ignore);
+
+            foreach (DroppedItemContainer container in nearbyContainers)
+            {
+                if (container != null && TerrainUtil.HasLineOfSight(position, container.transform.position, LAYER_OBSTACLES))
+                {
+                    Pool.FreeUnmanaged(ref nearbyContainers);
+                    return container;
+                }
+            }
+            Pool.FreeUnmanaged(ref nearbyContainers);
+            return null;
         }
 
         #endregion Container Spawning and Setup
+
+        #region Item Grouping
+
+        private void GroupItemsIntoContainer(DroppedItemContainer container, List<DroppedItem> items)
+        {
+            int currentSlotCount = container.inventory.itemList.Count;
+            int requiredSlots = items.Count;
+            if (currentSlotCount + requiredSlots > container.inventory.capacity)
+            {
+                int newCapacity = currentSlotCount + requiredSlots;
+                container.inventory.capacity = newCapacity;
+            }
+
+            foreach (DroppedItem droppedItem in items)
+            {
+                droppedItem.item.MoveToContainer(container.inventory);
+            }
+
+            float newDespawnTime = container.CalculateRemovalTime();
+            if (_config.ContainerLifetimeSeconds > 0)
+            {
+                newDespawnTime = _config.ContainerLifetimeSeconds;
+            }
+            container.ResetRemovalTime(newDespawnTime);
+
+            ExposedHooks.OnDroppedItemsGrouped(container, items);
+        }
+
+        #endregion Item Grouping
 
         #region Nearby Items Retrieval
 
@@ -222,9 +282,9 @@ namespace Oxide.Plugins
 
         private static class ExposedHooks
         {
-            public static void OnDroppedItemStackerSpawned(DroppedItemContainer droppedItemContainer, List<DroppedItem> groupedItems)
+            public static void OnDroppedItemsGrouped(DroppedItemContainer container, List<DroppedItem> groupedItems)
             {
-                Interface.CallHook("OnDroppedItemStackerSpawned", droppedItemContainer, groupedItems);
+                Interface.CallHook("OnDroppedItemsGrouped", container, groupedItems);
             }
         }
 
